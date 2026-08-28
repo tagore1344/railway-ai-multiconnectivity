@@ -1,0 +1,6 @@
+build/
+cmake-cache/
+*.o
+*.xml
+*.log
+__pycache__/
