@@ -1,13 +1,14 @@
-#include "ns3/applications-module.h"
 #include "ns3/core-module.h"
-#include "ns3/internet-module.h"
 #include "ns3/network-module.h"
+#include "ns3/internet-module.h"
 #include "ns3/point-to-point-module.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <numeric>
+#include <sstream>
 #include <vector>
 
 using namespace ns3;
@@ -70,8 +71,6 @@ class BondingHeader : public Header
 class BondingReceiver : public Application
 {
   public:
-    BondingReceiver() = default;
-
     void AddSocket(Ptr<Socket> socket)
     {
         m_sockets.push_back(socket);
@@ -86,6 +85,7 @@ class BondingReceiver : public Application
 
   private:
     void StartApplication() override {}
+
     void StopApplication() override
     {
         for (auto socket : m_sockets)
@@ -116,7 +116,6 @@ class BondingReceiver : public Application
 
             if (sequence < m_nextExpected)
             {
-                // Duplicate/late packet after delivery.
                 ++m_droppedPackets;
                 continue;
             }
@@ -186,8 +185,6 @@ class BondingSender : public Application
 
     uint32_t SelectLink()
     {
-        // Weighted round-robin. Larger packetRate means more packets
-        // scheduled on that backhaul over time.
         const uint32_t totalWeight =
             std::accumulate(m_packetRates.begin(), m_packetRates.end(), 0u);
         if (totalWeight == 0)
@@ -196,7 +193,7 @@ class BondingSender : public Application
         }
 
         uint32_t slot = m_linkCursor % totalWeight;
-        m_linkCursor++;
+        ++m_linkCursor;
 
         for (uint32_t i = 0; i < m_packetRates.size(); ++i)
         {
@@ -234,12 +231,10 @@ class BondingSender : public Application
             return;
         }
 
-        // One aggregate packet every 1 ms: deliberately above any single
-        // link's nominal packet service rate so that multi-link striping is
-        // observable without relying on an application helper.
-        m_event = Simulator::Schedule(MilliSeconds(1),
-                                      &BondingSender::SendOne,
-                                      this);
+        m_event = Simulator::Schedule(
+            MilliSeconds(1),
+            &BondingSender::SendOne,
+            this);
     }
 
     std::vector<Ptr<Socket>> m_sockets;
@@ -271,12 +266,9 @@ int main(int argc, char* argv[])
     RngSeedManager::SetRun(1);
 
     NodeContainer sender;
-    NodeContainer receivers;
+    NodeContainer receiverNode;
     sender.Create(1);
-    receivers.Create(1);
-
-    std::vector<NetDeviceContainer> devices;
-    std::vector<Ipv4InterfaceContainer> interfaces;
+    receiverNode.Create(1);
 
     const std::vector<std::string> dataRates = {"30Mbps", "20Mbps", "15Mbps"};
     const std::vector<std::string> delays = {"20ms", "35ms", "50ms"};
@@ -287,17 +279,18 @@ int main(int argc, char* argv[])
 
     InternetStackHelper internet;
     internet.Install(sender);
-    internet.Install(receivers);
+    internet.Install(receiverNode);
 
     Ipv4AddressHelper address;
+    std::vector<Ipv4InterfaceContainer> interfaces;
+
     for (uint32_t i = 0; i < 3; ++i)
     {
         PointToPointHelper p2p;
         p2p.SetDeviceAttribute("DataRate", StringValue(dataRates[i]));
         p2p.SetChannelAttribute("Delay", StringValue(delays[i]));
 
-        auto link = p2p.Install(sender.Get(0), receivers.Get(0));
-        devices.push_back(link);
+        NetDeviceContainer link = p2p.Install(sender.Get(0), receiverNode.Get(0));
 
         std::ostringstream subnet;
         subnet << "10.1." << (i + 1) << ".0";
@@ -305,32 +298,34 @@ int main(int argc, char* argv[])
         interfaces.push_back(address.Assign(link));
     }
 
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
     const uint16_t basePort = 5000;
     std::vector<Ptr<Socket>> senderSockets;
-    std::vector<Ptr<Socket>> receiverSockets;
 
     auto receiver = CreateObject<BondingReceiver>();
-    receivers.Get(0)->AddApplication(receiver);
-    receiver->SetStartTime(Seconds(0));
+    receiverNode.Get(0)->AddApplication(receiver);
+    receiver->SetStartTime(Seconds(0.0));
     receiver->SetStopTime(Seconds(simulationSeconds));
 
     for (uint32_t i = 0; i < 3; ++i)
     {
-        Ptr<Socket> rx = Socket::CreateSocket(receivers.Get(0), UdpSocketFactory::GetTypeId());
-        InetSocketAddress local(Ipv4Address::GetAny(), basePort + i);
-        rx->Bind(local);
+        Ptr<Socket> rx =
+            Socket::CreateSocket(receiverNode.Get(0), UdpSocketFactory::GetTypeId());
+        rx->Bind(InetSocketAddress(Ipv4Address::GetAny(), basePort + i));
         receiver->AddSocket(rx);
-        receiverSockets.push_back(rx);
 
-        Ptr<Socket> tx = Socket::CreateSocket(sender.Get(0), UdpSocketFactory::GetTypeId());
-        InetSocketAddress remote(receiverAddresses[i], basePort + i);
-        tx->Connect(remote);
+        Ptr<Socket> tx =
+            Socket::CreateSocket(sender.Get(0), UdpSocketFactory::GetTypeId());
+        tx->Connect(InetSocketAddress(receiverAddresses[i], basePort + i));
         senderSockets.push_back(tx);
     }
 
+    std::vector<uint32_t> weights = bonding
+                                        ? std::vector<uint32_t>{6, 4, 3}
+                                        : std::vector<uint32_t>{1, 0, 0};
+
     auto app = CreateObject<BondingSender>();
-    std::vector<uint32_t> weights = bonding ? std::vector<uint32_t>{6, 4, 3}
-                                            : std::vector<uint32_t>{1, 0, 0};
     app->Configure(senderSockets,
                    weights,
                    packetBytes,
@@ -365,7 +360,8 @@ int main(int argc, char* argv[])
     std::cout << "Delivered bytes  : " << receiver->GetDeliveredBytes() << "\n";
     std::cout << "Dropped packets  : " << receiver->GetDroppedPackets() << "\n";
     std::cout << "Reordered packets: " << receiver->GetReorderedPackets() << "\n";
-    std::cout << "Effective goodput: " << goodputMbps << " Mbps\n";
+    std::cout << "Effective goodput: " << std::fixed << std::setprecision(3)
+              << goodputMbps << " Mbps\n";
     std::cout << "------------------------------------\n\n";
 
     Simulator::Destroy();
