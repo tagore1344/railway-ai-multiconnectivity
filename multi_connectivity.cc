@@ -1,6 +1,5 @@
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
-#include "ns3/csma-module.h"
 #include "ns3/flow-monitor-module.h"
 #include "ns3/internet-module.h"
 #include "ns3/mobility-module.h"
@@ -11,13 +10,14 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 using namespace ns3;
 
-struct Network
+struct NetworkInfo
 {
-    double capacity;
+    double capacityMbps;
     double basePosition;
     double range;
     std::string name;
@@ -26,26 +26,33 @@ struct Network
 int
 main(int argc, char* argv[])
 {
-    uint32_t passengersCount = 12;
+    uint32_t passengerCount = 12;
     double simulationTime = 60.0;
-    double interval = 5.0;
+    double decisionInterval = 5.0;
+    double passengerDemandMbps = 1.0;
     double trainSpeed = 20.0;
 
     CommandLine cmd;
+
     cmd.AddValue(
         "passengers",
-        "Number of passenger devices",
-        passengersCount);
+        "Number of logical passenger flows",
+        passengerCount);
 
     cmd.AddValue(
         "time",
-        "Simulation duration",
+        "Simulation duration in seconds",
         simulationTime);
 
     cmd.AddValue(
         "interval",
-        "Gateway decision interval",
-        interval);
+        "Gateway decision interval in seconds",
+        decisionInterval);
+
+    cmd.AddValue(
+        "demand",
+        "Traffic demand per passenger in Mbps",
+        passengerDemandMbps);
 
     cmd.AddValue(
         "speed",
@@ -55,16 +62,17 @@ main(int argc, char* argv[])
     cmd.Parse(argc, argv);
 
     std::cout
-        << "\n=================================================\n"
-        << " Railway Multi-Connectivity Gateway V5\n"
-        << " Mobility + Quality Monitoring + Load Balancing\n"
-        << "=================================================\n\n";
+        << "\n====================================================\n"
+        << " Railway Multi-Connectivity Gateway V5.1\n"
+        << " Corrected Traffic Measurement Model\n"
+        << " Mobility + Link Quality + Load Balancing\n"
+        << "====================================================\n\n";
 
     // ---------------------------------------------------------
     // NETWORK DEFINITIONS
     // ---------------------------------------------------------
 
-    std::vector<Network> networks =
+    std::vector<NetworkInfo> networks =
     {
         {30.0, 200.0, 450.0, "Network-1"},
         {20.0, 500.0, 450.0, "Network-2"},
@@ -79,7 +87,7 @@ main(int argc, char* argv[])
     gateway.Create(1);
 
     NodeContainer passengers;
-    passengers.Create(passengersCount);
+    passengers.Create(passengerCount);
 
     NodeContainer servers;
     servers.Create(3);
@@ -91,41 +99,7 @@ main(int argc, char* argv[])
     internet.Install(servers);
 
     // ---------------------------------------------------------
-    // PASSENGER LAN
-    // ---------------------------------------------------------
-
-    NodeContainer passengerLan;
-
-    passengerLan.Add(gateway);
-
-    for (uint32_t i = 0; i < passengersCount; ++i)
-    {
-        passengerLan.Add(passengers.Get(i));
-    }
-
-    CsmaHelper csma;
-
-    csma.SetChannelAttribute(
-        "DataRate",
-        StringValue("1Gbps"));
-
-    csma.SetChannelAttribute(
-        "Delay",
-        TimeValue(NanoSeconds(10)));
-
-    NetDeviceContainer lanDevices =
-        csma.Install(passengerLan);
-
-    Ipv4AddressHelper lanAddress;
-
-    lanAddress.SetBase(
-        "192.168.20.0",
-        "255.255.255.0");
-
-    lanAddress.Assign(lanDevices);
-
-    // ---------------------------------------------------------
-    // THREE BACKHAUL LINKS
+    // BACKHAUL LINKS
     // ---------------------------------------------------------
 
     std::vector<Ipv4Address> serverAddresses;
@@ -143,7 +117,7 @@ main(int argc, char* argv[])
             StringValue(
                 std::to_string(
                     static_cast<int>(
-                        networks[i].capacity)) +
+                        networks[i].capacityMbps)) +
                 "Mbps"));
 
         p2p.SetChannelAttribute(
@@ -159,7 +133,7 @@ main(int argc, char* argv[])
         Ipv4AddressHelper address;
 
         std::string subnet =
-            "10.40." +
+            "10.50." +
             std::to_string(i + 1) +
             ".0";
 
@@ -172,6 +146,15 @@ main(int argc, char* argv[])
 
         serverAddresses.push_back(
             interfaces.GetAddress(1));
+
+        std::cout
+            << networks[i].name
+            << " | Capacity: "
+            << networks[i].capacityMbps
+            << " Mbps"
+            << " | Base station: "
+            << networks[i].basePosition
+            << " m\n";
     }
 
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
@@ -180,7 +163,7 @@ main(int argc, char* argv[])
     // SERVER SINKS
     // ---------------------------------------------------------
 
-    std::vector<ApplicationContainer> sinks;
+    std::vector<ApplicationContainer> sinkApps;
 
     for (uint32_t i = 0; i < 3; ++i)
     {
@@ -194,9 +177,9 @@ main(int argc, char* argv[])
             sinkHelper.Install(servers.Get(i));
 
         sink.Start(Seconds(0.0));
-        sink.Stop(Seconds(simulationTime));
+        sink.Stop(Seconds(simulationTime + 1.0));
 
-        sinks.push_back(sink);
+        sinkApps.push_back(sink);
     }
 
     // ---------------------------------------------------------
@@ -221,72 +204,51 @@ main(int argc, char* argv[])
         Vector(trainSpeed, 0.0, 0.0));
 
     // ---------------------------------------------------------
-    // PASSENGER POSITIONS
+    // QUALITY MODEL
     // ---------------------------------------------------------
 
-    MobilityHelper passengerMobility;
-
-    passengerMobility.SetPositionAllocator(
-        "ns3::GridPositionAllocator",
-        "MinX",
-        DoubleValue(2.0),
-        "MinY",
-        DoubleValue(0.0),
-        "DeltaX",
-        DoubleValue(2.0),
-        "DeltaY",
-        DoubleValue(2.0),
-        "GridWidth",
-        UintegerValue(4),
-        "LayoutType",
-        StringValue("RowFirst"));
-
-    passengerMobility.SetMobilityModel(
-        "ns3::ConstantPositionMobilityModel");
-
-    passengerMobility.Install(passengers);
-
-    // ---------------------------------------------------------
-    // CSV LOG
-    // ---------------------------------------------------------
-
-    std::ofstream csv(
-        "railway-v5-controller.csv");
-
-    csv << "time,train_position,"
-        << "network1_quality,network2_quality,network3_quality,"
-        << "network1_passengers,network2_passengers,network3_passengers\n";
-
-    // ---------------------------------------------------------
-    // CONTROLLER
-    // ---------------------------------------------------------
-
-    auto quality =
-        [&](double trainPosition,
-            uint32_t network) -> double
+    auto linkQuality =
+        [&](double position, uint32_t link) -> double
     {
         double distance =
             std::abs(
-                trainPosition -
-                networks[network].basePosition);
+                position -
+                networks[link].basePosition);
 
-        if (distance >= networks[network].range)
+        if (distance >= networks[link].range)
         {
             return 0.0;
         }
 
         double factor =
             1.0 -
-            distance / networks[network].range;
+            distance / networks[link].range;
 
-        return
-            networks[network].capacity *
-            std::max(0.0, factor);
+        return networks[link].capacityMbps *
+               std::max(0.0, factor);
     };
 
-    for (double t = 2.0;
+    // ---------------------------------------------------------
+    // CSV OUTPUT
+    // ---------------------------------------------------------
+
+    std::ofstream csv(
+        "railway-v5.1-timeseries.csv");
+
+    csv
+        << "time,train_position,"
+        << "network1_quality,network2_quality,network3_quality,"
+        << "network1_passengers,network2_passengers,network3_passengers,"
+        << "network1_interval_mbps,network2_interval_mbps,"
+        << "network3_interval_mbps,total_interval_mbps\n";
+
+    // ---------------------------------------------------------
+    // CONTROLLER + TRAFFIC GENERATOR
+    // ---------------------------------------------------------
+
+    for (double t = 1.0;
          t < simulationTime;
-         t += interval)
+         t += decisionInterval)
     {
         Simulator::Schedule(
             Seconds(t),
@@ -298,47 +260,51 @@ main(int argc, char* argv[])
                 double trainPosition =
                     position.x;
 
-                std::vector<double> q(3);
+                std::vector<double> quality(3);
 
                 for (uint32_t n = 0; n < 3; ++n)
                 {
-                    q[n] =
-                        quality(
+                    quality[n] =
+                        linkQuality(
                             trainPosition,
                             n);
                 }
 
-                std::vector<uint32_t> load(
-                    3,
+                std::vector<uint32_t> assigned(3, 0);
+
+                // -------------------------------------------------
+                // PASSENGER ASSIGNMENT
+                //
+                // Each passenger selects a reachable network.
+                // The score rewards quality and penalizes load.
+                // -------------------------------------------------
+
+                std::vector<uint32_t> passengerLink(
+                    passengerCount,
                     0);
 
-                // Assign each passenger to the network
-                // having the best quality/load score.
                 for (uint32_t p = 0;
-                     p < passengersCount;
+                     p < passengerCount;
                      ++p)
                 {
                     double bestScore = -1.0;
                     uint32_t selected = 0;
 
-                    for (uint32_t n = 0;
-                         n < 3;
-                         ++n)
+                    for (uint32_t n = 0; n < 3; ++n)
                     {
-                        if (q[n] <= 0.0)
+                        if (quality[n] <= 0.0)
                         {
                             continue;
                         }
 
-                        double normalizedLoad =
+                        double loadPenalty =
+                            1.0 +
                             static_cast<double>(
-                                load[n]) /
-                            std::max(q[n], 0.1);
+                                assigned[n]);
 
                         double score =
-                            q[n] /
-                            (1.0 +
-                             normalizedLoad);
+                            quality[n] /
+                            loadPenalty;
 
                         if (score > bestScore)
                         {
@@ -347,47 +313,99 @@ main(int argc, char* argv[])
                         }
                     }
 
-                    load[selected]++;
+                    passengerLink[p] = selected;
+                    assigned[selected]++;
                 }
 
                 std::cout
-                    << "\n-------------------------------------------------\n";
+                    << "\n----------------------------------------------------\n";
 
                 std::cout
-                    << "Controller time: "
+                    << "Controller t="
                     << std::fixed
                     << std::setprecision(1)
                     << t
-                    << " s\n";
-
-                std::cout
-                    << "Train position: "
+                    << " s"
+                    << " | Train="
                     << trainPosition
                     << " m\n";
 
-                for (uint32_t n = 0;
-                     n < 3;
-                     ++n)
+                for (uint32_t n = 0; n < 3; ++n)
                 {
                     std::cout
                         << networks[n].name
-                        << " | Quality: "
+                        << " | Quality="
                         << std::setprecision(2)
-                        << q[n]
-                        << " | Passengers: "
-                        << load[n]
+                        << quality[n]
+                        << " | Passengers="
+                        << assigned[n]
                         << "\n";
                 }
 
-                csv
-                    << t << ","
-                    << trainPosition << ","
-                    << q[0] << ","
-                    << q[1] << ","
-                    << q[2] << ","
-                    << load[0] << ","
-                    << load[1] << ","
-                    << load[2] << "\n";
+                // -------------------------------------------------
+                // GENERATE MEASURABLE TRAFFIC
+                //
+                // The gateway represents the shared passenger
+                // access side. Each logical passenger contributes
+                // a flow through the selected backhaul.
+                // -------------------------------------------------
+
+                for (uint32_t p = 0;
+                     p < passengerCount;
+                     ++p)
+                {
+                    uint32_t selected =
+                        passengerLink[p];
+
+                    if (quality[selected] <= 0.0)
+                    {
+                        continue;
+                    }
+
+                    OnOffHelper traffic(
+                        "ns3::UdpSocketFactory",
+                        InetSocketAddress(
+                            serverAddresses[selected],
+                            9000 + selected));
+
+                    traffic.SetAttribute(
+                        "DataRate",
+                        StringValue(
+                            std::to_string(
+                                passengerDemandMbps) +
+                            "Mbps"));
+
+                    traffic.SetAttribute(
+                        "PacketSize",
+                        UintegerValue(1200));
+
+                    double start =
+                        t + 0.10 +
+                        0.01 * p;
+
+                    double stop =
+                        std::min(
+                            t + decisionInterval - 0.10,
+                            simulationTime - 0.01);
+
+                    if (start >= stop)
+                    {
+                        continue;
+                    }
+
+                    traffic.SetAttribute(
+                        "StartTime",
+                        TimeValue(
+                            Seconds(start)));
+
+                    traffic.SetAttribute(
+                        "StopTime",
+                        TimeValue(
+                            Seconds(stop)));
+
+                    traffic.Install(
+                        gateway.Get(0));
+                }
             });
     }
 
@@ -401,49 +419,46 @@ main(int argc, char* argv[])
         flowHelper.InstallAll();
 
     std::cout
-        << "\nStarting V5 simulation...\n";
+        << "\nStarting V5.1 simulation...\n";
 
     Simulator::Stop(
         Seconds(simulationTime));
 
     Simulator::Run();
 
-    csv.close();
-
     // ---------------------------------------------------------
-    // RESULTS
+    // FINAL MEASUREMENTS
     // ---------------------------------------------------------
 
     uint64_t totalBytes = 0;
 
     std::cout
-        << "\n=================================================\n"
-        << " V5 FINAL RESULTS\n"
-        << "=================================================\n";
+        << "\n====================================================\n"
+        << " V5.1 FINAL RESULTS\n"
+        << "====================================================\n";
 
     for (uint32_t n = 0; n < 3; ++n)
     {
         Ptr<PacketSink> sink =
             DynamicCast<PacketSink>(
-                sinks[n].Get(0));
+                sinkApps[n].Get(0));
 
-        uint64_t received =
+        uint64_t bytes =
             sink->GetTotalRx();
 
-        totalBytes += received;
+        totalBytes += bytes;
 
         double throughput =
-            received *
-            8.0 /
-            ((simulationTime - 2.0) *
+            bytes * 8.0 /
+            ((simulationTime - 1.0) *
              1000000.0);
 
         std::cout
             << networks[n].name
-            << " | Received: "
-            << received
+            << " | Received="
+            << bytes
             << " bytes"
-            << " | Measured throughput: "
+            << " | Throughput="
             << std::fixed
             << std::setprecision(3)
             << throughput
@@ -451,9 +466,8 @@ main(int argc, char* argv[])
     }
 
     double aggregate =
-        totalBytes *
-        8.0 /
-        ((simulationTime - 2.0) *
+        totalBytes * 8.0 /
+        ((simulationTime - 1.0) *
          1000000.0);
 
     std::cout
@@ -463,7 +477,7 @@ main(int argc, char* argv[])
 
     std::cout
         << "PASSENGERS: "
-        << passengersCount
+        << passengerCount
         << "\n";
 
     std::cout
@@ -477,14 +491,13 @@ main(int argc, char* argv[])
         << " m\n";
 
     std::cout
-        << "\nController log saved to:\n"
-        << "railway-v5-controller.csv\n";
+        << "CSV: railway-v5.1-timeseries.csv\n";
 
     std::cout
-        << "=================================================\n";
+        << "====================================================\n";
 
     monitor->SerializeToXmlFile(
-        "railway-v5-flowmon.xml",
+        "railway-v5.1-flowmon.xml",
         true,
         true);
 
