@@ -15,11 +15,42 @@ Simulation and machine-learning research prototype for reliable passenger Wi-Fi 
 - V8.2: Randomized conditions and unseen-seed future-network prediction
 - V9: Reactive vs predictive policy evaluation
 - V10: Multi-link bonding capacity-model stage
+- V11: Predictive selection + bonding-capacity integration
 
-## Current research direction
+## Current evidence
 
-The next engineering milestone is packet-level multi-link bonding with scheduling, sequencing, reordering/reassembly and measured goodput. The current V10 stage is a capacity model, not proof of real-world Internet speed aggregation.
+- V7 dataset: 840 observations from 40 simulation conditions.
+- V8.2 dataset: 720 observations from 60 randomized seeds.
+- V8.2 future-network Random Forest: 99.24% accuracy on 132 observations from 12 unseen seeds.
 
-## Research discipline
+These are results from the project's synthetic ns-3 model and should not be interpreted as measured railway or cellular-network performance.
 
-Simulation results are kept separate from real-world claims. Synthetic model accuracy is reported as simulation evidence and should be validated with real network measurements before commercialization claims are made.
+## Repository structure
+
+```text
+v11/                       Predictive + bonding integration
+v9_predictive_vs_reactive.py   Offline V9 policy evaluator
+v10_bonding_emulation.py       V10 capacity-model evaluator
+train_v81.py                    V8.1 predictor
+train_v82.py                    V8.2 unseen-seed predictor
+railway-v7-dataset.csv          V7 dataset
+railway-v8.2-dataset.csv        Randomized V8.2 dataset
+```
+
+## Research roadmap
+
+```text
+Simulation
+  -> adaptive monitoring
+  -> future-link prediction
+  -> reactive vs predictive evaluation
+  -> bonding-capacity model
+  -> predictive + bonding integration
+  -> packet-level bonding in ns-3
+  -> hardware gateway prototype
+  -> real-world measurements
+```
+
+## Important limitation
+
+The current V10/V11 bonding work is still an offline capacity model. It does not yet prove real Internet speed aggregation or implement production packet-level bonding. The next engineering milestone is packet-level striping, sequencing, reordering/reassembly, retransmission handling, and measured goodput in ns-3 or a real multi-WAN testbed.
