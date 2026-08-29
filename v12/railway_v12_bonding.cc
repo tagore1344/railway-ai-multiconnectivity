@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <numeric>
@@ -282,7 +283,6 @@ int main(int argc, char* argv[])
     internet.Install(receiverNode);
 
     Ipv4AddressHelper address;
-    std::vector<Ipv4InterfaceContainer> interfaces;
 
     for (uint32_t i = 0; i < 3; ++i)
     {
@@ -295,7 +295,7 @@ int main(int argc, char* argv[])
         std::ostringstream subnet;
         subnet << "10.1." << (i + 1) << ".0";
         address.SetBase(subnet.str().c_str(), "255.255.255.0");
-        interfaces.push_back(address.Assign(link));
+        address.Assign(link);
     }
 
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
