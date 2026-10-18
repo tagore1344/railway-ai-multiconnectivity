@@ -1,0 +1,35 @@
+name: Software Gateway CI
+
+on:
+  push:
+    branches: ["main", "feature/**"]
+    paths:
+      - "software_gateway/**"
+      - ".github/workflows/software-gateway-ci.yml"
+  pull_request:
+    paths:
+      - "software_gateway/**"
+      - ".github/workflows/software-gateway-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: software_gateway/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r software_gateway/requirements.txt
+      - name: Compile Python source
+        run: python -m compileall -q software_gateway/app software_gateway/tests
+      - name: Run software gateway tests
+        run: python -m pytest -q software_gateway/tests
